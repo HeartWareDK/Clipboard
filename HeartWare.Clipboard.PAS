@@ -14,7 +14,7 @@ USES WinAPI.Windows, WinAPI.Messages,
 
 TYPE
   {$IFDEF HW }
-    TFileNames  = TPathStrArr;
+    TFileNames          = TPathStrArr;
   {$ELSE }
     TFileNames          = TArray<TFileName>;
     TFileNamesHelper    = RECORD HELPER FOR TFileNames
@@ -57,12 +57,15 @@ TYPE
                             PROCEDURE           Unhook;
                             PROCEDURE           SetUpdate(Value : TUpdateEvent);
                             FUNCTION            GetFile : TFileName;
-                            FUNCTION            GetFiles : TFileNames;
+                            FUNCTION            GetFiles(Max : UINT) : TFileNames; OVERLOAD;
+                            FUNCTION            GetFiles : TFileNames; OVERLOAD;
                             PROCEDURE           SetFile(CONST Value : TFileName); INLINE;
                             PROCEDURE           SetFiles(CONST Value : TFileNames);
+                            FUNCTION            GetComponent : TComponent;
                           PUBLIC
                             PROPERTY            AsFile : TFileName Read GetFile Write SetFile;
                             PROPERTY            AsFiles : TFileNames Read GetFiles Write SetFiles;
+                            PROPERTY            AsComponent : TComponent Read GetComponent Write SetComponent;
                             PROPERTY            OnUpdate : TUpdateEvent Read FOnUpdate Write SetUpdate;
                           END;
 
@@ -93,18 +96,23 @@ DESTRUCTOR TClipboard.Destroy;
     ClipBrd:=NIL
   END;
 
+FUNCTION TClipboard.GetComponent : TComponent;
+  BEGIN
+    IF HasFormat(CF_COMPONENT) THEN Result:=INHERITED GetComponent(NIL,NIL) ELSE Result:=NIL
+  END;
+
 FUNCTION TClipboard.GetFile : TFileName;
   BEGIN
-    VAR ARR := GetFiles;
+    VAR ARR := GetFiles(1);
     IF ARR.IsEmpty THEN Result:='' ELSE Result:=ARR[ARR.LOW]
   END;
 
-FUNCTION TClipboard.GetFiles : TFileNames;
+FUNCTION TClipboard.GetFiles(Max : UINT) : TFileNames;
   VAR
     hDrop       : WinAPI.ShellAPI.HDROP;
     FileCount,I : UINT;
     Len         : UINT;
-    S           : STRING;
+    S           : TFileName;
 
   BEGIN
     Result.Clear;
@@ -112,22 +120,28 @@ FUNCTION TClipboard.GetFiles : TFileNames;
 
     Open;
     TRY
-      hDrop:=GetAsHandle(CF_HDROP)
+      hDrop:=GetAsHandle(CF_HDROP);
+      IF hDrop=0 THEN EXIT;
+
+      // Number of files in the drop
+      FileCount:=DragQueryFile(hDrop,$FFFFFFFF,NIL,0);
+      IF FileCount=0 THEN EXIT;
+
+      FOR I:=0 TO PRED(FileCount) DO BEGIN
+        IF Result.Count>=Max THEN BREAK;
+        Len:=DragQueryFile(hDrop,I,NIL,0);
+        SetLength(S,Len);
+        IF Len>0 THEN DragQueryFile(hDrop,I,PChar(S),SUCC(Len));
+        Result.Append(S)
+      END
     FINALLY
       Close
-    END;
-    IF hDrop=0 THEN EXIT;
-
-    // Number of files in the drop
-    FileCount:=DragQueryFile(hDrop,$FFFFFFFF,NIL,0);
-    IF fileCount=0 THEN EXIT;
-
-    FOR I:=0 TO PRED(FileCount) DO BEGIN
-      Len:=DragQueryFile(hDrop,I,NIL,0);
-      SetLength(S,Len);
-      IF Len>0 THEN DragQueryFile(hDrop,I,PChar(S),SUCC(Len));
-      Result.Append(S)
     END
+  END;
+
+FUNCTION TClipboard.GetFiles : TFileNames;
+  BEGIN
+    Result:=GetFiles(MAXINT)
   END;
 
 PROCEDURE TClipboard.Hook;
@@ -141,13 +155,16 @@ PROCEDURE TClipboard.SetFile(CONST Value : TFileName);
   END;
 
 PROCEDURE TClipboard.SetFiles(CONST Value : TFileNames);
-  var
+  VAR
     I           : Integer;
     TotalChars  : Integer;
     MemSize     : Integer;
     hMem        : HGLOBAL;
     pDrop       : PDROPFILES;
     pData       : PChar;
+    Files       : STRING;
+    FileName    : TFileName;
+    ANSI        : AnsiString;
 
   BEGIN
     IF Value.IsEmpty THEN EXIT;
@@ -162,6 +179,7 @@ PROCEDURE TClipboard.SetFiles(CONST Value : TFileNames);
     // CF_HDROP requires a moveable global memory block
     hMem:=GlobalAlloc(GMEM_MOVEABLE OR GMEM_ZEROINIT,MemSize);
     IF hMem=0 THEN RaiseLastOSError;
+
     pDrop:=GlobalLock(hMem);
     IF NOT Assigned(pDrop) THEN BEGIN
       GlobalFree(hMem);
@@ -180,8 +198,12 @@ PROCEDURE TClipboard.SetFiles(CONST Value : TFileNames);
       pData:=PChar(PByte(pDrop)+pDrop.pFiles);
 
       // Copy each file name, each zero terminated
+      Files:='';
       FOR I:=Value.LOW TO Value.HIGH DO BEGIN
-        StrCopy(pData,PChar(Value[I]));
+        FileName:=Value[I];
+        IF NOT Files.IsEmpty THEN Files:=Files+#13;
+        Files:=Files+FileName;
+        StrCopy(pData,PChar(FileName));
         INC(pData,SUCC(LENGTH(Value[i])))
       END;
 
@@ -195,6 +217,9 @@ PROCEDURE TClipboard.SetFiles(CONST Value : TFileNames);
     Open;
     TRY
       SetAsHandle(CF_HDROP,hMem);
+      SetBuffer(CF_UNICODETEXT,PChar(Files)^,LENGTH(Files)*SizeOf(CHAR));
+      ANSI:=Files;
+      SetBuffer(CF_TEXT,PAnsiChar(ANSI)^,LENGTH(ANSI)*SizeOf(AnsiChar));
       // Do NOT GlobalFree(hMem); clipboard owns it now
     FINALLY
       Close
@@ -233,7 +258,7 @@ PROCEDURE TClipboard.TMsgWindow.CreateParams(VAR Params : TCreateParams);
     Params.X:=0; Params.Y:=0;
     Params.Width:=0; Params.Height:=0;
     // This is the crucial part:
-    Params.WndParent:=HWND_MESSAGE;  // Makes it a message-only window
+    Params.WndParent:=HWND_MESSAGE  // Makes it a message-only window
   END;
 
 DESTRUCTOR TClipboard.TMsgWindow.Destroy;
@@ -295,7 +320,7 @@ FUNCTION TFileNamesHelper.HIGH : INTEGER;
   END;
 
 FUNCTION TFileNamesHelper.IndexOf(CONST N : TFileName) : INTEGER;
-  FUNCTION SameFileName(CONST N1,N2 : TFileName) : BOOLEAN;
+  FUNCTION SameFileName(CONST N1,N2 : TFileName) : BOOLEAN; INLINE;
     BEGIN
       {$IFDEF UNIX }
         Result:=(AnsiCompareStr(N1,N2)=0)       // Case-Sensitive Comparison
