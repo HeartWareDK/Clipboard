@@ -40,13 +40,13 @@ TYPE
                           PRIVATE TYPE
                             TUpdateEvent        = REFERENCE TO PROCEDURE(Sender : TClipboard ; VAR Done : BOOLEAN);
                             TMsgWindow          = CLASS(TWinControl)
-                                                    CONSTRUCTOR Create(Clip : TClipboard);
+                                                    CONSTRUCTOR Create(Clip : TClipboard); REINTRODUCE;
                                                     DESTRUCTOR  Destroy; OVERRIDE;
                                                   PROTECTED
                                                     PROCEDURE   CreateParams(VAR Params : TCreateParams); OVERRIDE;
                                                   PRIVATE
                                                     FClip       : TClipboard;
-                                                    PROCEDURE   Update(VAR MSG : TMessage); MESSAGE WM_CLIPBOARDUPDATE;
+                                                    PROCEDURE   Update(VAR MSG : TMessage); REINTRODUCE; MESSAGE WM_CLIPBOARDUPDATE;
                                                   PUBLIC
                                                     PROPERTY    Clip : TClipboard Read FClip;
                                                   END;
@@ -132,7 +132,7 @@ FUNCTION TClipboard.GetFiles(Max : UINT) : TFileNames;
         Len:=DragQueryFile(hDrop,I,NIL,0);
         SetLength(S,Len);
         IF Len>0 THEN DragQueryFile(hDrop,I,PChar(S),SUCC(Len));
-        Result.Append(S)
+        IF FileExists(S) THEN Result.Append(S)
       END
     FINALLY
       Close
@@ -146,7 +146,11 @@ FUNCTION TClipboard.GetFiles : TFileNames;
 
 PROCEDURE TClipboard.Hook;
   BEGIN
-    IF NOT Assigned(MsgWindow) THEN MsgWindow:=TMsgWindow.Create(Self)
+    IF NOT Assigned(MsgWindow) THEN
+      TThread.Synchronize(NIL,PROCEDURE // Make sure window is created on Main Thread
+                                BEGIN
+                                  MsgWindow:=TMsgWindow.Create(Self)
+                                END)
   END;
 
 PROCEDURE TClipboard.SetFile(CONST Value : TFileName);
@@ -201,10 +205,12 @@ PROCEDURE TClipboard.SetFiles(CONST Value : TFileNames);
       Files:='';
       FOR I:=Value.LOW TO Value.HIGH DO BEGIN
         FileName:=Value[I];
-        IF NOT Files.IsEmpty THEN Files:=Files+#13;
-        Files:=Files+FileName;
-        StrCopy(pData,PChar(FileName));
-        INC(pData,SUCC(LENGTH(Value[i])))
+        IF FileExists(FileName) THEN BEGIN
+          IF NOT Files.IsEmpty THEN Files:=Files+#13;
+          Files:=Files+FileName;
+          StrCopy(pData,PChar(FileName));
+          INC(pData,SUCC(LENGTH(Value[i])))
+        END
       END;
 
       // Add final #0 for the multi-string terminator
@@ -213,12 +219,14 @@ PROCEDURE TClipboard.SetFiles(CONST Value : TFileNames);
       GlobalUnlock(hMem)
     END;
 
-    // Put the CF_HDROP handle on the clipboard
     Open;
     TRY
+      // Put the CF_HDROP handle on the clipboard
       SetAsHandle(CF_HDROP,hMem);
+      // Also put CF_UNICODETEXT format on the clipboard
       SetBuffer(CF_UNICODETEXT,PChar(Files)^,LENGTH(Files)*SizeOf(CHAR));
-      ANSI:=Files;
+      // And CF_TEXT (ANSI) format on the clipboard
+      ANSI:=AnsiString(Files);
       SetBuffer(CF_TEXT,PAnsiChar(ANSI)^,LENGTH(ANSI)*SizeOf(AnsiChar));
       // Do NOT GlobalFree(hMem); clipboard owns it now
     FINALLY
@@ -240,9 +248,6 @@ PROCEDURE TClipboard.Unhook;
 { TClipboard.TMsgWindow }
 
 CONSTRUCTOR TClipboard.TMsgWindow.Create(Clip : TClipboard);
-  VAR
-    P   : TThreadProcedure;
-
   BEGIN
     INHERITED Create(NIL);
     FClip:=Clip;
@@ -268,7 +273,7 @@ DESTRUCTOR TClipboard.TMsgWindow.Destroy;
     Clip.MsgWindow:=NIL
   END;
 
-PROCEDURE TClipboard.TMsgWindow.Update(VAR MSG : TMessage);
+PROCEDURE TClipboard.TMsgWindow.Update(VAR MSG : TMessage); // Always called on Main Thread (since window is created in main thread)
   VAR
     Done        : BOOLEAN;
 
