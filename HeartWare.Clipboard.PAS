@@ -44,8 +44,13 @@ TYPE
                                                     DESTRUCTOR  Destroy; OVERRIDE;
                                                   PROTECTED
                                                     PROCEDURE   CreateParams(VAR Params : TCreateParams); OVERRIDE;
+                                                    PROCEDURE   CreateWindowHandle(CONST Params : TCreateParams); OVERRIDE;
+                                                    PROCEDURE   DestroyWindowHandle; OVERRIDE;
+                                                    PROCEDURE   AddListener; VIRTUAL;
+                                                    PROCEDURE   RemoveListener; VIRTUAL;
                                                   PRIVATE
                                                     FClip       : TClipboard;
+                                                    Listening   : BOOLEAN;
                                                     PROCEDURE   Update(VAR MSG : TMessage); REINTRODUCE; MESSAGE WM_CLIPBOARDUPDATE;
                                                   PUBLIC
                                                     PROPERTY    Clip : TClipboard Read FClip;
@@ -247,13 +252,17 @@ PROCEDURE TClipboard.Unhook;
 
 { TClipboard.TMsgWindow }
 
+PROCEDURE TClipboard.TMsgWindow.AddListener;
+  BEGIN
+    Listening:=Listening OR AddClipboardFormatListener(Handle)
+  END;
+
 CONSTRUCTOR TClipboard.TMsgWindow.Create(Clip : TClipboard);
   BEGIN
     INHERITED Create(NIL);
     FClip:=Clip;
-    ControlStyle:=ControlStyle+[csAcceptsControls];
     Visible:=FALSE;
-    AddClipboardFormatListener(Handle)
+    HandleNeeded
   END;
 
 PROCEDURE TClipboard.TMsgWindow.CreateParams(VAR Params : TCreateParams);
@@ -266,11 +275,32 @@ PROCEDURE TClipboard.TMsgWindow.CreateParams(VAR Params : TCreateParams);
     Params.WndParent:=HWND_MESSAGE  // Makes it a message-only window
   END;
 
+PROCEDURE TClipboard.TMsgWindow.CreateWindowHandle(CONST Params : TCreateParams);
+  BEGIN
+    INHERITED;
+    IF Assigned(FClip) AND Assigned(FClip.FOnUpdate) THEN AddListener
+  END;
+
+PROCEDURE TClipboard.TMsgWindow.DestroyWindowHandle;
+  BEGIN
+    RemoveListener;
+    INHERITED
+  END;
+
+PROCEDURE TClipboard.TMsgWindow.RemoveListener;
+  BEGIN
+    IF Listening THEN BEGIN
+      RemoveClipboardFormatListener(Handle);
+      Listening:=FALSE
+    END
+  END;
+
 DESTRUCTOR TClipboard.TMsgWindow.Destroy;
   BEGIN
-    RemoveClipboardFormatListener(Handle);
+    VAR C := Clip;
+    RemoveListener;
     INHERITED;
-    Clip.MsgWindow:=NIL
+    C.MsgWindow:=NIL
   END;
 
 PROCEDURE TClipboard.TMsgWindow.Update(VAR MSG : TMessage); // Always called on Main Thread (since window is created in main thread)
