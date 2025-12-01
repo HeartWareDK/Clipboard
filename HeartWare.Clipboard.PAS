@@ -229,10 +229,10 @@ PROCEDURE TClipboard.SetFiles(CONST Value : TFileNames);
       // Put the CF_HDROP handle on the clipboard
       SetAsHandle(CF_HDROP,hMem);
       // Also put CF_UNICODETEXT format on the clipboard
-      SetBuffer(CF_UNICODETEXT,PChar(Files)^,LENGTH(Files)*SizeOf(CHAR));
+      SetBuffer(CF_UNICODETEXT,PChar(Files)^,SUCC(LENGTH(Files))*SizeOf(CHAR));
       // And CF_TEXT (ANSI) format on the clipboard
       ANSI:=AnsiString(Files);
-      SetBuffer(CF_TEXT,PAnsiChar(ANSI)^,LENGTH(ANSI)*SizeOf(AnsiChar));
+      SetBuffer(CF_TEXT,PAnsiChar(ANSI)^,SUCC(LENGTH(ANSI))*SizeOf(AnsiChar));
       // Do NOT GlobalFree(hMem); clipboard owns it now
     FINALLY
       Close
